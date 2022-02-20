@@ -98,10 +98,14 @@ groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0),
     this.jointBody.collisionFilterMask = 0
     this.world.add(this.jointBody)
 
+    this.movableObjects = []
     this.box = this.addBody()
+    this.movableObjects.push(this.box)
+    this.movableObjects.push(this.addBody(true, -1.5, 2, -3))
+    //this.movableObjects.push(this.addBody(true, 1.5, 2, -3))
   }
 
-  addBody(box = true) {
+  addBody(box = true,x = 0, y = 1, z = -3) {
 let shape
     if (!box) {
       shape = new CANNON.Sphere(0.5)
@@ -112,7 +116,7 @@ let shape
     const body = new CANNON.Body({mass: 5, material: material})
     body.addShape(shape)
 
-    body.position.set(-1.5, 2, -3)
+    body.position.set(x, y, z)
     body.linearDamping = this.damping
     this.world.add(body)
 
@@ -145,7 +149,7 @@ const pivot = pos.clone()
 
       this.userData.selectPressed = true
       if (this.userData.selected) {
-        self.addConstraint(self.marker.getWorldPosition(self.origin), self.box)
+        self.addConstraint(self.marker.getWorldPosition(self.origin), this.userData.body)
         self.controller.attach(self.marker)
       }
     }
@@ -155,6 +159,7 @@ const pivot = pos.clone()
       this.userData.selectPressed = false
       const constraint = self.controller.userData.constraint
       if (constraint) {
+
         self.world.removeConstraint(constraint)
         self.controller.userData.constraint = undefined
         self.scene.add(self.marker)
@@ -228,13 +233,28 @@ const pivot = pos.clone()
       this.raycaster.ray.direction.set(0, 0, -1).applyMatrix4(
           this.workingMatrix)
 
+      const intersectsBodies = []
+      this.movableObjects.forEach(element =>
+          intersectsBodies.push({
+            intersects: this.raycaster.intersectObject(element.threemesh.children[0]),
+            body: element
+          })
+      )
+      const intersectBody = intersectsBodies
+          .filter(element => element.intersects.length > 0)
+          .sort((firstEl, secondEl) => firstEl.intersects[0].distance
+              - secondEl.intersects[0].distance)
+          .at(0)
+
       const intersects = this.raycaster.intersectObject(
           this.box.threemesh.children[0])
 
-      if (intersects.length > 0) {
-        this.marker.position.copy(intersects[0].point)
+      if (intersectBody) {
+        this.intersectBody = intersectBody
+        this.marker.position.copy(intersectBody.intersects[0].point)
         this.marker.visible = true
-        controller.children[0].scale.z = intersects[0].distance
+        controller.children[0].scale.z = intersectBody.intersects[0].distance
+        controller.userData.body = intersectBody.body
         controller.userData.selected = true
       } else {
         this.marker.visible = false
@@ -248,6 +268,7 @@ const pivot = pos.clone()
       }
     }
   }
+
 
   resize() {
     this.camera.aspect = window.innerWidth / window.innerHeight
