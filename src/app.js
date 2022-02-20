@@ -5,6 +5,10 @@ import Stats from 'stats-js/src/Stats'
 import {OrbitControls} from 'three/examples/jsm/controls/OrbitControls.js'
 import {CannonHelper} from './utils/CannonHelper.js'
 import * as CANNON from "cannon/build/cannon"
+import {fetchProfile} from "three/examples/jsm/libs/motion-controllers.module"
+
+const DEFAULT_PROFILES_PATH = 'webxr-input-profiles';
+const DEFAULT_PROFILE = 'generic-trigger';
 
 class App {
   constructor() {
@@ -102,7 +106,8 @@ groundBody.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0),
     this.box = this.addBody()
     this.movableObjects.push(this.box)
     this.movableObjects.push(this.addBody(true, -1.5, 2, -3))
-    //this.movableObjects.push(this.addBody(true, 1.5, 2, -3))
+    this.movableObjects.push(this.addBody(true, 1.5, 2, -3))
+    this.movableObjects.push(this.addBody(true, 0, 2, -3))
   }
 
   addBody(box = true,x = 0, y = 1, z = -3) {
@@ -172,6 +177,7 @@ const pivot = pos.clone()
     this.controller.addEventListener('selectend', onSelectEnd)
     this.controller.addEventListener('connected', function (event) {
 
+        self.onConnect.call(self, event)
       const mesh = self.buildController.call(self, event.data)
       mesh.scale.z = 0
       this.add(mesh)
@@ -224,7 +230,19 @@ const pivot = pos.clone()
   }
 
   handleController(controller) {
-    if (!controller.userData.selectPressed) {
+      const dt = this.clock.getDelta()
+      if(this.renderer.xr.isPreseting){
+          if(!this.elapsedTime){
+              this.elapsedTime = 0
+          }
+          this.elapsedTime += dt
+          if (this.elapsedTime > 0.3) {
+              this.updateGamepadState()
+              this.updateUI(this.leftUi, this.buttonStates)
+              this.elapsedTime = 0
+          }
+      }
+      if (!controller.userData.selectPressed) {
       controller.children[0].scale.z = 10
 
       this.workingMatrix.identity().extractRotation(controller.matrixWorld)
@@ -263,12 +281,92 @@ const pivot = pos.clone()
     } else {
       const constraint = controller.userData.constraint
       if (constraint) {
+          const ray = new THREE.Ray()
+          const direction = new THREE.Vector3()
+          direction.copy(this.marker.position)
+          direction.normalize()
+          ray.direction.copy(direction)
+          const position = new THREE.Vector3()
+
+          const yAxis = -.04 * Number(this.buttonStates["xr_standard_thumbstick"].yAxis)
+            //const yAxis = -.04 * Number(-1)
+
+          if (yAxis !== 0){
+              const distance = controller.children[0].scale.z + yAxis
+              controller.children[0].scale.z = distance
+
+              ray.at(distance, position)
+              this.marker.position.copy(position)
+          }
         this.jointBody.position.copy(this.marker.getWorldPosition(this.origin))
         constraint.update();
       }
     }
   }
+    createButtonStates(components) {
+        const buttonStates = {}
+        this.gamepadIndices = components
+        Object.keys(components).forEach(key => {
+            if (key.includes('touchpad') || key.includes('thumbstick')) {
+                buttonStates[key] = { button: 0, xAxis: 0, yAxis: 0 }
+            } else {
+                buttonStates[key] = 0
+            }
+        })
+        this.buttonStates = buttonStates
+    }
 
+    updateGamepadState() {
+        const session = this.renderer.xr.getSession()
+        const inputSource = session.inputSources[this.index]
+        if (inputSource && inputSource.gamepad && this.gamepadIndices && this.buttonStates) {
+            const gamepad = inputSource.gamepad
+            try {
+                Object.entries(this.buttonStates).forEach(([key, value]) => {
+                    const buttonIndex = this.gamepadIndices[key].button
+                    if (key.includes('touchpad') || key.includes('thumbstick')) {
+                        const xAxisIndex = this.gamepadIndices[key].xAxis
+                        const yAxisIndex = this.gamepadIndices[key].yAxis
+                        this.buttonStates[key].button = gamepad.buttons[buttonIndex].value
+                        this.buttonStates[key].xAxis = gamepad.axes[xAxisIndex].toFixed(2)
+                        this.buttonStates[key].yAxis = gamepad.axes[yAxisIndex].toFixed(2)
+                    } else {
+                        this.buttonStates[key] = gamepad.buttons[buttonIndex].value
+                    }
+                })
+            } catch (e) {
+                console.warn("An error occurred setting the ui")
+            }
+        }
+    }
+
+    onConnect(event){
+        const info = {};
+
+        fetchProfile(event.data, DEFAULT_PROFILES_PATH, DEFAULT_PROFILE)
+            .then(({profile, assetPath}) => {
+                // console.log( JSON.stringify(profile));
+
+                info.name = profile.profileId;
+                info.targetRayMode = event.data.targetRayMode;
+
+                Object.entries(profile.layouts).forEach(([key, layout]) => {
+                    const components = {};
+                    Object.values(layout.components).forEach((component) => {
+                        components[component.rootNodeName] = component.gamepadIndices;
+                    });
+                    info[key] = components;
+                });
+
+                if (event.data.handedness === 'left') {
+                    this.createButtonStates(info.left);
+                } else {
+                    this.createButtonStates(info.right);
+                }
+
+                // console.log( JSON.stringify(info) );
+            });
+    }
 
   resize() {
     this.camera.aspect = window.innerWidth / window.innerHeight
